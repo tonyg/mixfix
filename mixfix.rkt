@@ -55,7 +55,21 @@
 
 ;; terminal? : Piece -> Boolean
 (define (terminal? piece)
+  ;; TODO: this ignores piece-nonterminal? pieces... but somehow that
+  ;; seems like the right thing to do??
   (not (eq? piece '_)))
+
+(define (piece-wild? piece)
+  (eq? piece '_))
+
+(define (piece-nonterminal? piece)
+  (and (pair? piece)
+       (null? (cdr piece))
+       (symbol? (car piece))))
+
+(define (piece-fixed? piece)
+  (not (or (piece-wild? piece)
+	   (piece-nonterminal? piece))))
 
 (define (operator-fixity-predicate first-terminal last-terminal)
   (lambda (o)
@@ -78,14 +92,46 @@
 
 (define (operator-pieces/trim o)
   (let ((p (operator-pieces o)))
-    (when (eq? (first p) '_)
+    (when (piece-wild? (first p))
       (set! p (cdr p)))
-    (when (eq? (last p) '_)
+    (when (piece-wild? (last p))
       (set! p (drop-right p 1)))
     p))
 
 (define (variant** name group-name)
   (string->symbol (string-append (symbol->string group-name) "::" name)))
+
+(define (make-or alts)
+  (cond
+   ((null? alts) '(FAIL))
+   ((null? (cdr alts)) (car alts))
+   (else `(or ,@alts))))
+
+(define (make-seq ps)
+  (cond
+   ((null? ps) '(FAIL))
+   ((null? (cdr ps)) (car ps))
+   (else `(seq ,@ps))))
+
+(define (operator-spine->ometa o start-symbol)
+  (let loop ((pieces (operator-pieces/trim o))
+	     (i 0)
+	     (varnames '())
+	     (acc '()))
+    (if (null? pieces)
+	(make-seq (reverse (cons `(action (build-ast-spine ',o (list ,@(reverse varnames))))
+				 acc)))
+	(let* ((piece (car pieces))
+	       (rest (cdr pieces))
+	       (this-var (string->symbol (string-append "T" (number->string i))))
+	       (fragment (cond
+			  ((piece-wild? piece) `(bind ,this-var (apply ,start-symbol)))
+			  ((piece-nonterminal? piece) `(bind ,this-var (apply ,(car piece))))
+			  (else `(exactly ,piece))))
+	       (new-acc (cons fragment acc)))
+	  (if (piece-fixed? piece)
+	      (loop rest i varnames new-acc)
+	      (loop rest (+ i 1) (cons this-var varnames) new-acc))))))
 
 (define (grouping->productions g group-name)
   (let ((grouping (find (lambda (gr) (eq? group-name (grouping-name gr)))
@@ -93,24 +139,8 @@
 	(tighter-groups (let ((upstream (graph-edges-from (grammar-precedence-graph g) group-name)))
 			  (filter (lambda (n) (memq n upstream)) (grammar-grouping-names g))))
 	(start-symbol (grammar-start-symbol g)))
-    (define (make-or alts)
-      (cond
-       ((null? alts) '(FAIL))
-       ((null? (cdr alts)) (car alts))
-       (else `(or ,@alts))))
-    (define (make-seq ps)
-      (cond
-       ((null? ps) '(FAIL))
-       ((null? (cdr ps)) (car ps))
-       (else `(seq ,@ps))))
     (define (op-clause pred)
-      (map (lambda (o)
-	     (make-seq (map (lambda (piece)
-			      (cond
-			       ((eq? piece '_) `(apply ,start-symbol))
-			       ((and (list? piece) (null? (cdr piece))) `(apply ,(car piece)))
-			       (else `(exactly ,piece))))
-			    (operator-pieces/trim o))))
+      (map (lambda (o) (operator-spine->ometa o start-symbol))
 	   (filter pred (grouping-operators grouping))))
     (define (variant* name [group-name group-name])
       (variant** name group-name))
@@ -138,30 +168,44 @@
 				(v? left-alts))))
 	    (want-non (and (v? up-alts)
 			   (v? non-alts))))
-	`((,(variant* "hat") ,(make-or (append (care (make-seq (list (variant "op-closed")))
+	`((,(variant* "hat") ,(make-or (append (care (variant "op-closed")
 						     (v? closed-alts))
-					       (care (make-seq (list (variant "up")
-								     (variant "op-non")
-								     (variant "up")))
+					       (care (make-seq (list `(bind L ,(variant "up"))
+								     `(bind M ,(variant "op-non"))
+								     `(bind R ,(variant "up"))
+								     `(action (merge-l-m-r
+									       L M R))))
 						     want-non)
-					       (care (make-seq (list `(many1 ,(variant "right"))
-								     (variant "up")))
+					       (care (make-seq (list `(bind Rights
+								       (many1 ,(variant "right")))
+								     `(bind R ,(variant "up"))
+								     `(action (merge-rs-r
+									       Rights R))))
 						     want-right)
-					       (care (make-seq (list (variant "up")
-								     `(many1 ,(variant "left"))))
+					       (care (make-seq (list `(bind L ,(variant "up"))
+								     `(bind Lefts
+								       (many1 ,(variant "left")))
+								     `(action (merge-l-ls
+									       L Lefts))))
 						     want-left))))
 	  ,@(care `(,(variant* "right") ,(make-or (append (care (variant "op-pre")
 								(v? prefix-alts))
 							  (care (make-seq
-								 (list (variant "up")
-								       (variant "op-right")))
+								 (list `(bind L ,(variant "up"))
+								       `(bind Rm
+									 ,(variant "op-right"))
+								       `(action (merge-l-rm
+										 L Rm))))
 								(v? right-alts)))))
 		  want-right)
 	  ,@(care `(,(variant* "left") ,(make-or (append (care (variant "op-post")
 							       (v? postfix-alts))
 							 (care (make-seq 
-								(list (variant "op-left")
-								      (variant "up")))
+								(list `(bind Lm
+									,(variant "op-left"))
+								      `(bind R ,(variant "up"))
+								      `(action (merge-lm-r
+										Lm R))))
 							       (v? left-alts)))))
 		  want-left)
 	  ,@(care `(,(variant* "up") ,(make-or up-alts)) (v? up-alts))
@@ -192,6 +236,27 @@
 	      graph)))
 
 ;;---------------------------------------------------------------------------
+;; AST Fixup operations - used in generated semantic actions
+
+(define (build-ast-spine o varnames)
+  (cons o varnames))
+
+(define (merge-l-m-r l m r)
+  (cons (car m) (cons l (append (cdr m) (list r)))))
+
+(define (merge-rs-r rs r)
+  (fold-right merge-lm-r r rs))
+
+(define (merge-l-ls l ls)
+  (fold (lambda (rm l) (merge-l-rm l rm)) l ls))
+
+(define (merge-l-rm l rm)
+  (cons (car rm) (cons l (cdr rm))))
+
+(define (merge-lm-r lm r)
+  (cons (car lm) (append (cdr lm) (list r))))
+
+;;---------------------------------------------------------------------------
 
 (define G
   (grammar 'expr
@@ -219,7 +284,7 @@
 		 (precedence 'add 'eq)
 		 (precedence 'eq 'and))))
 
-(pretty-print (grammar->ometa G))
+;;(pretty-print (grammar->ometa G))
 
 (simple-ometa-driver `((variable (seq (bind n (anything))
 				      (action (if (symbol? n)
@@ -231,7 +296,7 @@
 						 (error 'expected 'literal)))))
 		       ,@(grammar->ometa G))
 		     'expr
-		     '(1 - 2 + 3 == 2 + 0)
+		     '(aa ^ 1 - 2 + 3 == 2 + 0 ^ "(" xx ! ")" ^ yy)
 		     (lambda (sv tail err)
 		       (pretty-print `((sv ,sv)
 				       (tail ,(input-stream->list tail))
