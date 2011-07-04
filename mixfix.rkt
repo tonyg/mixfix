@@ -267,6 +267,9 @@
 		 (grouping 'add
 			   (Left _ + _)
 			   (Left _ - _))
+		 (grouping 'mul
+			   (Left _ * _)
+			   (Left _ / _))
 		 (grouping 'not
 			   (Postfix !))
 		 (grouping 'top
@@ -282,7 +285,10 @@
 		 (precedence 'top 'add)
 		 (precedence 'not 'eq)
 		 (precedence 'add 'eq)
-		 (precedence 'eq 'and))))
+		 (precedence 'eq 'and)
+		 (precedence 'top 'mul)
+		 (precedence 'mul 'eq)
+		 (precedence 'mul 'add))))
 
 ;;(pretty-print (grammar->ometa G))
 
@@ -297,6 +303,9 @@
 		       ,@(grammar->ometa G))
 		     'expr
 		     '(aa ^ 1 - 2 + 3 == 2 + 0 ^ "(" xx ! ")" ^ yy)
+		     ;;'(if b ^ n + n == n ! then n else "(" n + n - n ")")
+		     ;; '(aa ^ 1 - 2 * 3 == 2 + 0 ^ "(" xx ! ")" ^ yy)
+		     ;; '(aa ^ "(" 1 - 2 ")" * 3 == 2 + 0 ^ "(" xx ! ")" ^ yy)
 		     (lambda (sv tail err)
 		       (pretty-print `((sv ,sv)
 				       (tail ,(input-stream->list tail))
