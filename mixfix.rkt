@@ -311,3 +311,48 @@
 				       (tail ,(input-stream->list tail))
 				       (err ,(format-ometa-error err)))))
 		     report-ometa-error)
+
+;;---------------------------------------------------------------------------
+;; Experiment with two adjacent wild positions
+
+(let ((G (grammar 'expr
+		  (list (grouping 'normal
+				  (Right if _ then _)
+				  (Right two _ _)
+				  (Left _ mid _)
+				  (Right one _))
+			(grouping 'top
+				  (Non zero)
+				  (Non "(" _ ")")))
+		  (list (precedence 'top 'normal)))))
+  (newline)
+  (serialize-ometa-ast (grammar->ometa G))
+  (let ((drive (lambda (expr)
+		 (display "----------------------------------------")
+		 (newline)
+		 (pretty-print expr)
+		 (simple-ometa-driver (grammar->ometa G)
+				      'expr
+				      expr
+				      (lambda (sv tail err)
+					(pretty-print `((sv ,sv)
+							(tail ,(input-stream->list tail))
+							(err ,(format-ometa-error err)))))
+				      (lambda (err)
+					(display (format-ometa-error err))
+					(newline))))))
+    (drive '(zero))
+    (drive '(one zero))
+    (drive '(two one zero zero))
+    (drive '(two zero one zero))
+    (drive '(two two zero one zero one zero))
+    (drive '(two one two zero zero one zero))
+    (drive '(one zero mid zero)) ;; ambiguous - (mid (one zero) zero) or (one (mid zero zero))?
+    (drive '("(" one zero mid zero ")"))
+    (drive '("(" one zero ")" mid zero))
+    (drive '(one "(" zero mid zero ")"))
+    (drive '(if one zero then "(" zero mid zero ")"))
+    (drive '(if zero mid zero then one zero))
+    (drive '(if zero mid zero mid zero then one zero))
+    (drive '(if "(" one zero ")" mid zero then zero))
+    ))
